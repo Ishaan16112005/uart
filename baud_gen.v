@@ -5,19 +5,19 @@ module baud_gen #(
 ) (
   input wire clk,
   input wire rst_n,
-  output wire tick
+  output reg tick 
 );
 
   localparam max_count = (sys_clk /(baud_rate * over_sample));
 
-  reg ($clog2(max_count) -1 : 0) counter;
+  reg [$clog2(max_count) -1 : 0] counter;
 
   always @(posedge clk or negedge rst_n) begin 
     if(!rst_n) begin 
       counter <= 0;
       tick <= 1'b0;
     end else begin 
-      if (counter <= (max_count -1)) begin 
+      if (counter == (max_count -1)) begin 
         counter <= 0;
         tick <= 1'b1;
       end else begin 
@@ -27,4 +27,4 @@ module baud_gen #(
     end
   end
 
-endmodule 
+endmodule
