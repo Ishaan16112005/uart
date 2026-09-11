@@ -8,7 +8,7 @@ module baud_gen #(
   output reg tick 
 );
 
-  localparam max_count = (sys_clk /(baud_rate * over_sample));
+  localparam max_count = (sys_clk + (baud_rate * over_sample / 2)) / (baud_rate * over_sample);
 
   reg [$clog2(max_count) -1 : 0] counter;
 
