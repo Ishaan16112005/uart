@@ -1,100 +1,122 @@
-module uart_tx(
+module tx (
+  parameter width = 8,
+  parameter parity_en = 1,
+  parameter parity_type = "ODD"
+) (
+  input wire tick,
   input wire clk,
-  input wire reset,
-  input wire tx_tick, // to count the 16 bits 
-  input wire tx_start, // symbol for start
-  input wire [7:0] tx_data,
-  output reg tx_line, 
+  input wire rst_n,
+  input wire tx_start,
+  input wire [width-1:0] data_in,
+  output reg data_out,
+  output reg tx_done,
   output reg tx_busy
 );
-  localparam [1:0] idle = 2'b00;
-  localparam [1:0] start = 2'b01;
-  localparam [1:0] data = 2'b10;
-  localparam [1:0] stop = 2'b11;
 
-  reg [1:0] state_reg, next_state;
-  reg [3:0] s_reg, s_next;
-  reg [2:0] n_reg, n_next;
-  reg [7:0] b_reg, b_next;
-  reg       tx_reg, tx_next;
-  
-  always @(posedge clk or posedge reset) begin 
-    if (reset) begin 
-      state_reg <= idle;
-      s_reg <= 0;
-      n_reg <= 0;
-      b_reg <= 0;
-      tx_reg = 1'b1;
+  localparam IDLE = 3'b000;
+  localparam START = 3'b001;
+  localparam DATA = 3'b010;
+  localparam PARITY = 3'b100;
+  localparam STOP = 3'b101;
+
+  reg [2:0] state;
+  reg [$clog2(width)-1:0] current_index;
+  reg parity_bit; 
+  reg [width-1:0] tx_shift_reg;
+  reg [3:0] tick_count;
+
+  wire parity_calc = (parity_type == "ODD") ? ~^data_in : ^data_in;
+
+  always @(posedge clk or negedge rst_n) begin 
+    if (!rst_n) begin 
+      data_out <= 1'b1;
+      tx_busy <= 1'b0;
+      tx_done <= 1'b0;
+      state <= IDLE;
+      current_index <= 0;
+      parity_bit <= 1'b0;
+      tx_shift_reg <= {width{1'b0}};
+      tick_count <= 0;
     end else begin 
-      state_reg <= next_state;
-      s_reg <= s_next;
-      n_reg <= n_next;
-      b_reg <= b_next;
-      tx_reg <= tx_next;
-    end
-  end
-  
-  always @(*) begin 
-    next_state = state_reg;
-    s_next = s_reg;
-    n_next = n_reg;
-    b_next = b_reg;
-    tx_next = tx_reg;
-    tx_busy = 1'b1;
+      tx_done <= 1'b0; 
+      
+      case(state)
+        IDLE: begin
+          tx_done <= 1'b0;
+          tx_busy <= 1'b0;
+          if (tx_start) begin 
+            tx_busy <= 1'b1;
+            parity_bit <= parity_calc;
+            tx_shift_reg <= data_in;
+            data_out <= 1'b1;
+            tick_count <= 4'd0;
+            state <= START;
+          end 
+        end 
 
-    case (state_reg) 
-      idle : begin 
-        tx_busy = 1'b0;
-        tx_next = 1'b1;
-        if (tx_start) begin
-          s_next = 0;
-          next_state = start;
-          b_next = tx_data;
-        end
-      end
-      start : begin 
-        tx_next = 1'b0;
-        if (tx_tick) begin 
-          if(s_reg ==15 ) begin 
-            s_next = 0;
-            n_next = 0;
-            next_state = data;
-          end else begin 
-            s_next = s_reg + 1'b1;
-          end
-        end
-      end
-      data :  begin
-        tx_next = b_reg[0];
-        if (tx_tick) begin 
-          if (s_reg == 15) begin 
-            s_reg = 0;
-            b_next = b_reg >> 1;
-            if (n_reg == 7) begin 
-              next_state = stop;
+        START: begin
+          data_out <= 1'b0;
+          if (tick) begin 
+            if (tick_count == 4'd15) begin
+              tick_count <= 4'd0;
+              current_index <= 0;
+              state <= DATA;
             end else begin 
-              n_next = n_reg + 1'b1;
-            end
-            else begin 
-              s_next = s_reg + 1'b1;
-            end
-          end
-      end
-      stop : begin
-        tx_next = 1'b1;
-        if (tx_tick) begin
-          if (s_reg == 15) begin 
-            s_next = 0;
-            next_state = idle;
-          end else begin 
-            s_next = s_reg + 1;
-          end
+              tick_count <= tick_count + 4'd1;
+            end 
+          end  
         end
-      end
-    endcase
-  end 
 
-  always @(*) begin 
-    tx_line = tx_reg;
+        DATA: begin 
+          data_out <= tx_shift_reg[0];
+          if (tick) begin
+            if (tick_count == 4'd15) begin 
+              tick_count <= 4'd0;
+              tx_shift_reg <= tx_shift_reg >> 1;
+              if (current_index == width-1) begin 
+                state <= (parity_en) ? PARITY : STOP;
+              end else begin 
+                current_index <= current_index + 1'b1;
+              end 
+            end else begin 
+              tick_count <= tick_count + 4'd1;
+            end 
+          end 
+        end 
+
+        PARITY: begin
+          data_out <= parity_bit;
+          if (tick) begin 
+            if (tick_count == 4'd15) begin 
+              tick_count <= 4'd0;
+              state <= STOP;
+            end else begin 
+              tick_count <= tick_count + 4'd1;
+            end 
+          end 
+        end 
+
+        STOP: begin
+          data_out <= 1'b1;
+          if (tick) begin 
+            if (tick_count == 4'd15) begin 
+              tick_count <= 4'd0;
+              tx_done <= 1'b1;
+              tx_busy <= 1'b0;
+              state <= IDLE;
+            end else begin 
+              tick_count <= tick_count + 1;
+            end 
+          end 
+        end 
+
+        default: begin
+          state <= IDLE;
+        end 
+
+      endcase 
+    end 
   end 
 endmodule
+
+
